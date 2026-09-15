@@ -24,6 +24,29 @@ export const SEVERITIES = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'INFO'] as const
 /** One severity level. */
 export type Severity = (typeof SEVERITIES)[number]
 
+/**
+ * Rank of each level, higher is more severe; `SAFE` (a scan with no findings)
+ * sits below every real level. Derived from {@link SEVERITIES} so a level
+ * inserted into that list re-ranks instead of silently keeping the old order.
+ */
+export const SEVERITY_RANK: Readonly<Record<Severity | 'SAFE', number>> = Object.freeze(
+  // SEVERITIES is exhaustive over `Severity` and `SAFE` is added here, so the map is total.
+  Object.fromEntries([
+    ...SEVERITIES.map((severity, index) => [severity, SEVERITIES.length - index] as const),
+    ['SAFE', 0] as const,
+  ]) as Record<Severity | 'SAFE', number>,
+)
+
+/** The more severe of two levels. */
+export function worstSeverity(a: Severity | 'SAFE', b: Severity | 'SAFE'): Severity | 'SAFE' {
+  return SEVERITY_RANK[a] >= SEVERITY_RANK[b] ? a : b
+}
+
+/** Whether `severity` is at or above `threshold`. */
+export function atLeast(severity: Severity | 'SAFE', threshold: Severity): boolean {
+  return SEVERITY_RANK[severity] >= SEVERITY_RANK[threshold]
+}
+
 /** A JSON-safe value; used for finding metadata so reports are model- and wire-safe. */
 export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue }
 
@@ -179,10 +202,11 @@ function renderThrown(value: unknown): string {
 
 /** Highest severity present, or `SAFE` when there are no findings. */
 function maxSeverity(findings: readonly Finding[]): Severity | 'SAFE' {
-  for (const severity of SEVERITIES) {
-    if (findings.some((finding) => finding.severity === severity)) return severity
+  let worst: Severity | 'SAFE' = 'SAFE'
+  for (const finding of findings) {
+    if (SEVERITY_RANK[finding.severity] > SEVERITY_RANK[worst]) worst = finding.severity
   }
-  return 'SAFE'
+  return worst
 }
 
 /**
@@ -302,7 +326,9 @@ export class PluginScanService extends Service {
       results,
       durationMs: Date.now() - start,
       findingsCount: results.reduce((sum, result) => sum + result.findingsCount, 0),
-      maxSeverity: maxSeverity(results.flatMap((result) => result.findings)),
+      // Each result already ranked its own findings; folding the maxima avoids
+      // materializing every finding of the batch just to rank it again.
+      maxSeverity: results.reduce<Severity | 'SAFE'>((worst, result) => worstSeverity(worst, result.maxSeverity), 'SAFE'),
     }
   }
 

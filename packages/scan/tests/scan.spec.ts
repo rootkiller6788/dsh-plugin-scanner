@@ -4,9 +4,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import { describe, expect, it } from 'vitest'
-import PluginScanService from '../src/index.ts'
+import PluginScanService, { SEVERITIES, SEVERITY_RANK, atLeast, worstSeverity } from '../src/index.ts'
 import { loadPluginPackage } from '../src/load.ts'
-import type { Analyzer, Config, Finding, RulePack } from '../src/index.ts'
+import type { Analyzer, Config, Finding, RulePack, Severity } from '../src/index.ts'
 
 function fixturePackage(files: Record<string, string>): string {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-scan-'))
@@ -42,6 +42,27 @@ function makeGitRepo(files: Record<string, string>): string {
   execFileSync('git', ['commit', '-qm', 'init'], { cwd: dir })
   return dir
 }
+
+describe('severity ranking', () => {
+  it('ranks every level off the SEVERITIES list, with SAFE below all of them', () => {
+    expect(SEVERITIES.map((severity) => SEVERITY_RANK[severity])).toEqual([5, 4, 3, 2, 1])
+    expect(SEVERITY_RANK.SAFE).toBe(0)
+  })
+
+  it('picks the worse of two levels', () => {
+    expect(worstSeverity('LOW', 'CRITICAL')).toBe('CRITICAL')
+    expect(worstSeverity('CRITICAL', 'LOW')).toBe('CRITICAL')
+    expect(worstSeverity('SAFE', 'INFO')).toBe('INFO')
+    expect(worstSeverity('SAFE', 'SAFE')).toBe('SAFE')
+  })
+
+  it('compares a level against a threshold, SAFE failing every one', () => {
+    expect(atLeast('HIGH', 'HIGH')).toBe(true)
+    expect(atLeast('CRITICAL', 'HIGH')).toBe(true)
+    expect(atLeast('MEDIUM', 'HIGH')).toBe(false)
+    expect(atLeast('SAFE', 'INFO')).toBe(false)
+  })
+})
 
 describe('loadPluginPackage', () => {
   it('defers reading file content until an analyzer asks for it', () => {
@@ -197,5 +218,30 @@ describe('PluginScanService', () => {
     expect(batch.results.length).toBe(2)
     expect(batch.findingsCount).toBe(1)
     expect(batch.maxSeverity).toBe('HIGH')
+  })
+
+  it('aggregates the batch maximum from the per-result maxima', async () => {
+    const ctx = new Context()
+    await ctx.plugin(PluginScanService)
+    const byName: Record<string, Severity> = { 'p-crit': 'CRITICAL', 'p-low': 'LOW' }
+    const analyzer: Analyzer = {
+      name: 'fake',
+      analyze: (input) => {
+        const severity = byName[input.pkg.name]
+        return severity === undefined ? [] : [{ ...fakeFinding('X'), severity }]
+      },
+    }
+    ctx.pluginScan.registerAnalyzer(analyzer)
+
+    const registryPath = join(mkdtempSync(join(tmpdir(), 'dsh-reg-')), 'registry.json')
+    writeFileSync(registryPath, JSON.stringify(['p-crit', 'p-low', 'p-clean'].map((name) => ({
+      name,
+      path: fixturePackage({ 'package.json': JSON.stringify({ name }) }),
+    }))))
+
+    const batch = await ctx.pluginScan.scanRegistry(registryPath)
+    expect(batch.results.map((result) => result.maxSeverity)).toEqual(['CRITICAL', 'LOW', 'SAFE'])
+    expect(batch.maxSeverity).toBe('CRITICAL')
+    expect(batch.findingsCount).toBe(2)
   })
 })

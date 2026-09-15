@@ -9,16 +9,13 @@ import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { JsonValue } from '@deepseek-ai/dsh-tools'
-import { SEVERITIES, type ScanBatchReport, type ScanReport, type ScanTarget, type Severity } from 'dsh-plugin-scan'
+import { SEVERITIES, atLeast, type ScanBatchReport, type ScanReport, type ScanTarget, type Severity } from 'dsh-plugin-scan'
 
 /** Cordis plugin name. */
 export const name = 'tool-plugin-scan'
 
 /** Services this consumer reads: the scanner, the tool registry, and the command registry. */
 export const inject = ['pluginScan', 'tools', 'commands']
-
-/** Severity rank, higher is more severe; `SAFE` is the floor. */
-const RANK: Record<Severity | 'SAFE', number> = { CRITICAL: 5, HIGH: 4, MEDIUM: 3, LOW: 2, INFO: 1, SAFE: 0 }
 
 export interface Config {
   /** Severity at or above which the report is flagged `failed`. Empty disables. */
@@ -85,7 +82,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     async execute(args, exec) {
       const target: ScanTarget = { kind: 'directory', path: args.path }
       const report = await ctx.pluginScan.scan(target, { signal: exec.signal })
-      const failed = failOn !== undefined && RANK[report.maxSeverity] >= RANK[failOn]
+      const failed = failOn !== undefined && atLeast(report.maxSeverity, failOn)
       // The report is JSON-safe by construction; the cast satisfies the `json` output schema.
       return { ...report, failed } as unknown as JsonValue
     },
@@ -106,7 +103,7 @@ export function apply(ctx: Context, config: Config = {}): void {
       if (path.length === 0) return { kind: 'error', text: 'Usage: /scan <plugin-directory-path>' }
       try {
         const report = await ctx.pluginScan.scan({ kind: 'directory', path }, { signal: invocation.signal })
-        const failed = failOn !== undefined && RANK[report.maxSeverity] >= RANK[failOn]
+        const failed = failOn !== undefined && atLeast(report.maxSeverity, failOn)
         return { kind: 'success', text: renderScanText({ ...report, failed }) }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
