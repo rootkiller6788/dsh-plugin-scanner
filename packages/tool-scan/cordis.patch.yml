@@ -1,0 +1,14 @@
+# dsh-tool-plugin-scan — installable bundle patch.
+#
+# Inserts the three scanner rows (definition, provider, consumer) so the whole
+# seam composes from one `dsh plugin add`. Rows are addressable by id from user
+# overlays, so a later patch can disable a single analyzer or the whole tool.
+- insert:
+    - id: plugin-scan
+      name: 'dsh-plugin-scan'
+
+    - id: plugin-scan-rules
+      name: 'dsh-plugin-scan-rules'
+
+    - id: tool-plugin-scan
+      name: 'dsh-tool-plugin-scan'

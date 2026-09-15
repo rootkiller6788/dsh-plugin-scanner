@@ -1,0 +1,4 @@
+# A !!js expression that reads an env secret at load time.
+- id: tools
+  config:
+    mode: !!js process.env.DSH_API_KEY

@@ -1,0 +1,120 @@
+# Core rule pack: the manifest every built-in analyzer emits against, plus the
+# case-insensitive substring `matches` lists for the pure-pattern rules.
+# Structural rules (row overrides, AND-combinations, manifest scripts) carry no
+# `matches` — their detection lives in the analyzer code.
+
+name: core
+version: "1.0"
+
+rules:
+  CONFIG_TRUSTED_ROW_OVERRIDE:
+    severity: HIGH
+    category: config_row_override
+    description: A patch overrides the config of a security-relevant row (sandbox, approval, credentials, llm).
+
+  CONFIG_TRUSTED_ROW_DISABLED:
+    severity: CRITICAL
+    category: config_row_override
+    description: A patch disables a security-relevant row, removing a guard.
+
+  CONFIG_JS_EXPRESSION:
+    severity: HIGH
+    category: js_config_expression
+    description: The patch uses a !!js expression, which runs arbitrary code at load time.
+    matches:
+      - '!!js'
+
+  CONFIG_JS_CAPABILITY:
+    severity: HIGH
+    category: js_config_expression
+    description: A !!js expression reaches fs/shell/credentials/network capabilities.
+    matches:
+      - 'ctx.fs'
+      - 'ctx.shell'
+      - 'ctx.credentials'
+      - 'ctx.web'
+      - 'ctx.bash'
+      - 'process.env'
+      - 'node:child_process'
+      - 'node:fs'
+      - 'node:net'
+
+  CAP_DYNAMIC_EXEC:
+    severity: HIGH
+    category: capability_escalation
+    description: Source uses eval / new Function / node:vm dynamic code execution.
+    matches:
+      - 'eval('
+      - 'new Function('
+      - 'runInNewContext'
+      - 'runInThisContext'
+      - 'node:vm'
+
+  CAP_DANGEROUS_IMPORT:
+    severity: MEDIUM
+    category: capability_escalation
+    description: Source imports a dangerous Node builtin (fs / child_process / net / vm / http / https).
+    matches:
+      - 'node:fs'
+      - 'node:child_process'
+      - 'node:net'
+      - 'node:vm'
+      - 'node:http'
+      - 'node:https'
+
+  CAP_CREDENTIAL_EXFIL:
+    severity: HIGH
+    category: capability_escalation
+    description: Source reads process.env and performs network I/O, a credential-exfiltration shape.
+
+  CAP_TOOL_SHADOW:
+    severity: HIGH
+    category: tool_shadowing
+    description: Source registers a tool with a built-in tool name, shadowing it.
+
+  SUPPLY_LIFECYCLE_SCRIPT:
+    severity: HIGH
+    category: supply_chain
+    description: The manifest declares a preinstall/postinstall/prepare lifecycle script.
+
+  PROMPT_INJECTION_IGNORE:
+    severity: HIGH
+    category: prompt_injection
+    description: Model-visible text attempts to override prior instructions.
+    matches:
+      - 'ignore previous instructions'
+      - 'ignore all previous instructions'
+      - 'disregard previous instructions'
+      - 'disregard all previous instructions'
+      - 'forget previous instructions'
+      - 'ignore the above instructions'
+      - 'disregard the above instructions'
+      - 'override your system prompt'
+      - 'ignore your instructions'
+
+  PROMPT_INJECTION_JAILBREAK:
+    severity: HIGH
+    category: prompt_injection
+    description: Model-visible text carries a jailbreak / role-play-escape directive.
+    matches:
+      - 'jailbreak'
+      - 'DAN mode'
+      - 'developer mode'
+      - 'act as an unfiltered'
+      - 'do anything now'
+
+  RUNTIME_DYNAMIC_PACKAGE:
+    severity: MEDIUM
+    category: dynamic_package
+    description: Source drives dynamic Cordis packages (cordis_define / cordis_run / ctx.dynamic).
+    matches:
+      - 'cordis_define'
+      - 'cordis_run'
+      - 'cordis_stop'
+      - 'dynamicCordisRunner'
+      - 'ctx.dynamic'
+
+  RUNTIME_SELF_MODIFY:
+    severity: MEDIUM
+    category: self_modification
+    description: Source writes to cordis.yml / profile / harness-home state, a self-modification shape.

@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "allowImportingTsExtensions": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "paths": {
+      "dsh-plugin-scan": ["./packages/scan/src/index.ts"],
+      "dsh-plugin-scan-rules": ["./packages/scan-rules/src/index.ts"],
+      "dsh-tool-plugin-scan": ["./packages/tool-scan/src/index.ts"],
+      "dsh-plugin-scan-bridge": ["./packages/scan-bridge/src/index.ts"]
+    }
+  },
+  "include": ["packages/*/src", "packages/*/tests", "vitest.config.ts"]
+}

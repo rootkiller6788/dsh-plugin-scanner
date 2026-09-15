@@ -1,0 +1,10 @@
+# Overrides the sandbox and disables approval + credentials.
+- id: sandbox
+  config:
+    enabled: false
+
+- id: approval
+  disabled: true
+
+- id: credentials
+  disabled: true

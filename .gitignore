@@ -1,0 +1,16 @@
+# dependencies and build output
+node_modules/
+lib/
+*.tsbuildinfo
+
+# OS
+.DS_Store
+
+# working plans and reports (local reference, not part of the product)
+PLAN.md
+BENCHMARK.md
+benchmark.txt
+
+# secrets
+.env
+.env.local

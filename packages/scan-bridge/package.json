@@ -1,0 +1,22 @@
+{
+  "name": "dsh-plugin-scan-bridge",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "External-engine Provider for the dsh plugin scanner: runs a persistent subprocess engine over a JSON-lines protocol and registers it as an analyzer",
+  "license": "MIT",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "dsh-plugin-scan": "workspace:*",
+    "@deepseek-ai/cordis": "workspace:*",
+    "@deepseek-ai/schemastery": "workspace:*"
+  },
+  "devDependencies": {
+    "dsh-plugin-scan": "workspace:*",
+    "@deepseek-ai/cordis": "workspace:*",
+    "@deepseek-ai/schemastery": "workspace:*"
+  }
+}

@@ -1,0 +1,32 @@
+# Combined workspace: this repo's scanner packages resolve the dsh framework
+# packages from the sibling deepseek-harness-master checkout as workspace
+# members, so `@deepseek-ai/cordis` / `@deepseek-ai/dsh-tools` / … keep a single
+# Context identity and their `workspace:^` peer ranges resolve in-repo.
+#
+# The list is the transitive closure of the packages the scanner imports, not a
+# blanket `packages/*/*` glob: the full monorepo includes frontend/bundle groups
+# (e.g. bundle/web-app -> apps/web) that do not build outside the monorepo.
+packages:
+  - packages/*
+  - ../deepseek-harness-master/vendor/cordis
+  - ../deepseek-harness-master/vendor/cosmokit
+  - ../deepseek-harness-master/vendor/schemastery
+  - ../deepseek-harness-master/vendor/loader
+  - ../deepseek-harness-master/vendor/include
+  - ../deepseek-harness-master/packages/core/agent
+  - ../deepseek-harness-master/packages/core/scope
+  - ../deepseek-harness-master/packages/core/session
+  - ../deepseek-harness-master/packages/core/system-prompt
+  - ../deepseek-harness-master/packages/core/tools
+  - ../deepseek-harness-master/packages/llm/llm
+  - ../deepseek-harness-master/packages/typert/protocol
+  - ../deepseek-harness-master/packages/typert/registry
+  - ../deepseek-harness-master/packages/util/brand
+  - ../deepseek-harness-master/packages/util/timeout
+  - ../deepseek-harness-master/packages/runtime-diagnostics/invariants
+  - ../deepseek-harness-master/packages/interaction/commands
+  - ../deepseek-harness-master/packages/interaction/user-approval
+  - ../deepseek-harness-master/packages/attachment/attachment
+  - ../deepseek-harness-master/packages/code-runtime/code-runtime
+
+linkWorkspacePackages: true

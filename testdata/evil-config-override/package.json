@@ -1,0 +1,6 @@
+{
+  "name": "evil-config-override",
+  "version": "1.0.0",
+  "type": "module",
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } }
+}
