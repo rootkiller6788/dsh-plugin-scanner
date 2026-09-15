@@ -96,6 +96,15 @@ function loadCorePack(): { manifest: RulePack; matches: Record<string, string[]>
 
 const { manifest: CORE_PACK, matches: CORE_MATCHES } = loadCorePack()
 
+/**
+ * The `matches` lists with the case folding already applied. Matching is
+ * case-insensitive, so the fold is a constant of the pack — doing it here
+ * removes a `toLowerCase` per needle from every file the analyzers visit.
+ */
+const CORE_NEEDLES: Readonly<Record<string, readonly string[]>> = Object.fromEntries(
+  Object.entries(CORE_MATCHES).map(([ruleId, needles]) => [ruleId, needles.map((needle) => needle.toLowerCase())]),
+)
+
 export { CORE_PACK }
 
 /** Look up a rule, failing loud when it has no manifest entry. */
@@ -107,15 +116,37 @@ export function rule(ruleId: string): RuleMeta {
   return meta
 }
 
-/** The case-insensitive substring list for a pattern rule. */
+/** The case-insensitive substring list for a pattern rule, as authored. */
 export function matchesFor(ruleId: string): readonly string[] {
   return CORE_MATCHES[ruleId] ?? []
 }
 
+/**
+ * A single file's content, folded for matching once and then queried by any
+ * number of rules. Analyzers build one per file: lowercasing the whole file is
+ * the scanner's largest per-file allocation, so it must not be paid per rule.
+ */
+export interface RuleMatcher {
+  /** Whether the content contains any of `ruleId`'s `matches` (case-insensitive). */
+  has(ruleId: string): boolean
+}
+
+/** Build a {@link RuleMatcher} over `content`. */
+export function matcherFor(content: string): RuleMatcher {
+  let folded: string | undefined
+  return {
+    has(ruleId: string): boolean {
+      const needles = CORE_NEEDLES[ruleId]
+      if (needles === undefined || needles.length === 0) return false
+      folded ??= content.toLowerCase()
+      return needles.some((needle) => folded!.includes(needle))
+    },
+  }
+}
+
 /** Whether `content` contains any of a rule's `matches` (case-insensitive). */
 export function hasMatch(content: string, ruleId: string): boolean {
-  const needle = content.toLowerCase()
-  return matchesFor(ruleId).some((match) => needle.includes(match.toLowerCase()))
+  return matcherFor(content).has(ruleId)
 }
 
 /** Build a {@link Finding} whose severity/category come from the manifest. */

@@ -7,7 +7,7 @@
  */
 
 import type { Analyzer, Finding, ScanInput } from 'dsh-plugin-scan'
-import { DEFAULT_BUILTIN_TOOLS, finding, hasMatch } from '../rules.ts'
+import { DEFAULT_BUILTIN_TOOLS, finding, matcherFor } from '../rules.ts'
 
 const NETWORK_RE = /\bfetch\s*\(|node:(?:http|https)|\bXMLHttpRequest\b|\bWebSocket\b/u
 const PROCESS_ENV_RE = /\bprocess\.env\b/u
@@ -32,7 +32,8 @@ export function makeCapabilityAnalyzer(config: CapabilityAnalyzerConfig = {}): A
 
       for (const file of pkg.files) {
         if (file.kind !== 'source') continue
-        if (hasMatch(file.content, 'CAP_DYNAMIC_EXEC')) {
+        const matches = matcherFor(file.content)
+        if (matches.has('CAP_DYNAMIC_EXEC')) {
           out.push(finding({
             analyzer: name,
             ruleId: 'CAP_DYNAMIC_EXEC',
@@ -42,7 +43,7 @@ export function makeCapabilityAnalyzer(config: CapabilityAnalyzerConfig = {}): A
             remediation: 'Avoid eval / new Function / node:vm in plugin source.',
           }))
         }
-        if (hasMatch(file.content, 'CAP_DANGEROUS_IMPORT')) {
+        if (matches.has('CAP_DANGEROUS_IMPORT')) {
           out.push(finding({
             analyzer: name,
             ruleId: 'CAP_DANGEROUS_IMPORT',

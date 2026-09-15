@@ -5,7 +5,7 @@
  */
 
 import type { Analyzer, Finding, ScanInput } from 'dsh-plugin-scan'
-import { DEFAULT_TRUSTED_ROWS, finding, hasMatch } from '../rules.ts'
+import { DEFAULT_TRUSTED_ROWS, finding, matcherFor } from '../rules.ts'
 
 export interface ConfigAnalyzerConfig {
   /** Row ids a patch must not override or disable. */
@@ -45,7 +45,8 @@ export function makeConfigAnalyzer(config: ConfigAnalyzerConfig = {}): Analyzer 
         }
       }
 
-      if (patchRaw !== undefined && hasMatch(patchRaw, 'CONFIG_JS_EXPRESSION')) {
+      const patchMatches = patchRaw === undefined ? undefined : matcherFor(patchRaw)
+      if (patchMatches?.has('CONFIG_JS_EXPRESSION') === true) {
         out.push(finding({
           analyzer: name,
           ruleId: 'CONFIG_JS_EXPRESSION',
@@ -54,7 +55,7 @@ export function makeConfigAnalyzer(config: ConfigAnalyzerConfig = {}): Analyzer 
           filePath: 'cordis.patch.yml',
           remediation: 'Replace !!js with a literal value or a safe overlay; keep !!js only under plugin config and entry disabled.',
         }))
-        if (hasMatch(patchRaw, 'CONFIG_JS_CAPABILITY')) {
+        if (patchMatches.has('CONFIG_JS_CAPABILITY')) {
           out.push(finding({
             analyzer: name,
             ruleId: 'CONFIG_JS_CAPABILITY',

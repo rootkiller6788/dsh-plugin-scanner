@@ -6,7 +6,7 @@
  */
 
 import type { Analyzer, Finding, ScanInput } from 'dsh-plugin-scan'
-import { finding, hasMatch } from '../rules.ts'
+import { finding, matcherFor } from '../rules.ts'
 
 const WRITE_RE = /\b(?:writeFile|appendFile|writeFileSync|appendFileSync|outputFile|outputFileSync)\s*\(/u
 const TARGET_RE = /(?:cordis\.(?:yml|yaml)|cordis\.patch|profiles?\/|\.dsh\b)/u
@@ -20,7 +20,7 @@ export function makeRuntimeAnalyzer(): Analyzer {
       const out: Finding[] = []
       for (const file of input.pkg.files) {
         if (file.kind !== 'source') continue
-        if (hasMatch(file.content, 'RUNTIME_DYNAMIC_PACKAGE')) {
+        if (matcherFor(file.content).has('RUNTIME_DYNAMIC_PACKAGE')) {
           out.push(finding({
             analyzer: name,
             ruleId: 'RUNTIME_DYNAMIC_PACKAGE',

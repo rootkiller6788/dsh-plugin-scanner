@@ -6,7 +6,7 @@
  */
 
 import type { Analyzer, Finding, ScanInput } from 'dsh-plugin-scan'
-import { finding, hasMatch } from '../rules.ts'
+import { finding, matcherFor } from '../rules.ts'
 
 /** Build the model-face detector. */
 export function makeModelAnalyzer(): Analyzer {
@@ -23,7 +23,8 @@ export function makeModelAnalyzer(): Analyzer {
       if (manifest.length > 0) candidates.push({ path: 'package.json', content: manifest })
 
       for (const { path, content } of candidates) {
-        if (hasMatch(content, 'PROMPT_INJECTION_IGNORE')) {
+        const matches = matcherFor(content)
+        if (matches.has('PROMPT_INJECTION_IGNORE')) {
           out.push(finding({
             analyzer: name,
             ruleId: 'PROMPT_INJECTION_IGNORE',
@@ -33,7 +34,7 @@ export function makeModelAnalyzer(): Analyzer {
             remediation: 'Remove the override directive; treat any skill/plugin description as untrusted input.',
           }))
         }
-        if (hasMatch(content, 'PROMPT_INJECTION_JAILBREAK')) {
+        if (matches.has('PROMPT_INJECTION_JAILBREAK')) {
           out.push(finding({
             analyzer: name,
             ruleId: 'PROMPT_INJECTION_JAILBREAK',
