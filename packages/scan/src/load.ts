@@ -51,7 +51,28 @@ function readText(path: string): string {
   }
 }
 
-/** Walk a package directory collecting bounded file contents. */
+/**
+ * A walked file whose content is read on first access and then memoized.
+ *
+ * The walk needs only the path and the kind (derived from the path), and a real
+ * plugin package carries plenty of bytes no analyzer will ever inspect — a
+ * marketplace's `data/registry.json` is 800 KB of JSON that no detector reads.
+ * Reading on demand keeps those bytes off the scan's critical path and out of
+ * the retained package model.
+ */
+function lazyFile(root: string, rel: string, kind: PluginFileKind): PluginFile {
+  let content: string | undefined
+  return {
+    path: rel,
+    kind,
+    get content(): string {
+      content ??= readText(join(root, rel))
+      return content
+    },
+  }
+}
+
+/** Walk a package directory collecting file entries with lazy content. */
 function walkFiles(root: string): PluginFile[] {
   const files: PluginFile[] = []
   let dirs = 0
@@ -73,7 +94,7 @@ function walkFiles(root: string): PluginFile[] {
         if (!SKIP_DIRS.has(entry.name)) stack.push(abs)
       } else if (entry.isFile()) {
         if (entry.name === 'package.json' || entry.name === 'cordis.patch.yml') continue
-        files.push({ path: rel, content: readText(abs), kind: fileKind(rel) })
+        files.push(lazyFile(root, rel, fileKind(rel)))
       }
     }
   }

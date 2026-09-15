@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import { describe, expect, it } from 'vitest'
 import PluginScanService from '../src/index.ts'
+import { loadPluginPackage } from '../src/load.ts'
 import type { Analyzer, Config, Finding, RulePack } from '../src/index.ts'
 
 function fixturePackage(files: Record<string, string>): string {
@@ -41,6 +42,29 @@ function makeGitRepo(files: Record<string, string>): string {
   execFileSync('git', ['commit', '-qm', 'init'], { cwd: dir })
   return dir
 }
+
+describe('loadPluginPackage', () => {
+  it('defers reading file content until an analyzer asks for it', () => {
+    const dir = fixturePackage({ 'a.ts': 'const first = 1', 'data/blob.json': '{"v":1}', 'README.md': '# hi' })
+    const pkg = loadPluginPackage({ kind: 'directory', path: dir })
+
+    // The walk classified every entry by path alone; no bytes were read yet.
+    expect(Object.fromEntries(pkg.files.map((f) => [f.path, f.kind]))).toEqual({
+      'a.ts': 'source',
+      'data/blob.json': 'json',
+      'README.md': 'markdown',
+    })
+
+    // Rewriting the file after the walk proves the content had not been read.
+    writeFileSync(join(dir, 'a.ts'), 'const rewritten = 2')
+    const entry = pkg.files.find((f) => f.path === 'a.ts')!
+    expect(entry.content).toBe('const rewritten = 2')
+
+    // ...and the read is memoized, so a second access does not re-read.
+    writeFileSync(join(dir, 'a.ts'), 'const third = 3')
+    expect(entry.content).toBe('const rewritten = 2')
+  })
+})
 
 describe('PluginScanService', () => {
   it('runs a registered analyzer and reports its findings', async () => {
