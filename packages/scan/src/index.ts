@@ -132,7 +132,13 @@ export interface ScanInput {
   readonly pkg: PluginPackage
 }
 
-/** A detector. Both built-in and third-party analyzers share this interface. */
+/**
+ * A detector. Both built-in and third-party analyzers share this interface.
+ *
+ * Detectors are read-only over the loaded package and are run together rather
+ * than in sequence, so an analyzer must tolerate a concurrent sibling and must
+ * not assume it runs alone.
+ */
 export interface Analyzer {
   readonly name: string
   analyze(input: ScanInput, signal?: AbortSignal): readonly Finding[] | Promise<readonly Finding[]>
@@ -214,8 +220,9 @@ function maxSeverity(findings: readonly Finding[]): Severity | 'SAFE' {
  *
  * Registers analyzers and rule packs as effects, so disposing the owning fiber
  * withdraws them. `scan()` runs every registered analyzer over a loaded package
- * and applies policy (disabled rules, severity overrides); a failing analyzer
- * is recorded in `analyzersFailed` rather than swallowed.
+ * — concurrently, in registration order in the report — and applies policy
+ * (disabled rules, severity overrides); a failing analyzer is recorded in
+ * `analyzersFailed` rather than swallowed.
  */
 export class PluginScanService extends Service {
   static inject = []
@@ -277,18 +284,25 @@ export class PluginScanService extends Service {
     const pkg = loadPluginPackage(target)
 
     try {
+      // Detectors are independent passes over one already-loaded package, and
+      // the expensive one is a subprocess round trip, so they run together. The
+      // snapshot keeps the report's order stable if a registration is withdrawn
+      // mid-scan, and `allSettled` keeps a failing analyzer to one entry.
+      const registered = this.analyzers.slice()
+      const outcomes = await Promise.allSettled(
+        // The `async` wrapper turns a synchronous `throw` into a rejection;
+        // `allSettled` alone would let it escape the whole scan.
+        registered.map(async (analyzer) => analyzer.analyze({ target, pkg }, options?.signal)),
+      )
       const findings: Finding[] = []
       const analyzers: string[] = []
       const analyzersFailed: AnalyzerFailure[] = []
-      for (const analyzer of this.analyzers) {
+      outcomes.forEach((outcome, index) => {
+        const analyzer = registered[index]!
         analyzers.push(analyzer.name)
-        try {
-          const found = await analyzer.analyze({ target, pkg }, options?.signal)
-          findings.push(...found)
-        } catch (error) {
-          analyzersFailed.push({ analyzer: analyzer.name, error: renderThrown(error) })
-        }
-      }
+        if (outcome.status === 'fulfilled') findings.push(...outcome.value)
+        else analyzersFailed.push({ analyzer: analyzer.name, error: renderThrown(outcome.reason) })
+      })
 
       const normalized = this.applyPolicy(findings)
       return {

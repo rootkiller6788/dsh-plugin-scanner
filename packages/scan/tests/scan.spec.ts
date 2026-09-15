@@ -116,6 +116,45 @@ describe('PluginScanService', () => {
     expect((await ctx.pluginScan.scan({ kind: 'directory', path: dir })).findingsCount).toBe(0)
   })
 
+  it('runs the registered analyzers together, reporting them in registration order', async () => {
+    const ctx = new Context()
+    await ctx.plugin(PluginScanService)
+    const order: string[] = []
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const slow: Analyzer = {
+      name: 'slow',
+      analyze: async () => {
+        order.push('slow:start')
+        await gate
+        order.push('slow:end')
+        return [fakeFinding('SLOW', 'slow')]
+      },
+    }
+    const fast: Analyzer = {
+      name: 'fast',
+      analyze: () => {
+        order.push('fast:start')
+        return [fakeFinding('FAST', 'fast')]
+      },
+    }
+    ctx.pluginScan.registerAnalyzer(slow)
+    ctx.pluginScan.registerAnalyzer(fast)
+
+    const dir = fixturePackage({ 'package.json': JSON.stringify({ name: 'pkg' }) })
+    const pending = ctx.pluginScan.scan({ kind: 'directory', path: dir })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    // `fast` started while `slow` was still parked — the two were not serialized.
+    expect(order).toEqual(['slow:start', 'fast:start'])
+
+    release()
+    const report = await pending
+    // Concurrency does not reorder the report.
+    expect(report.analyzers).toEqual(['slow', 'fast'])
+    expect(report.findings.map((f) => f.ruleId)).toEqual(['SLOW', 'FAST'])
+  })
+
   it('records an analyzer failure without aborting the scan', async () => {
     const ctx = new Context()
     await ctx.plugin(PluginScanService)
