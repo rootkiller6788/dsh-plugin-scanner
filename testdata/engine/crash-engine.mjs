@@ -10,10 +10,15 @@ import { join } from 'node:path'
 const ENGINE_VERSION = '1.0.0'
 const MODE = (process.argv.find((arg) => arg.startsWith('--mode=')) ?? '--mode=after-scan').slice('--mode='.length)
 
+/** `--pad=N` bloats the farewell, to test that the bridge bounds what it keeps. */
+const flag = (name) => process.argv.find((arg) => arg.startsWith(`--${name}=`))?.slice(name.length + 3) ?? ''
+const PAD = Number(flag('pad') || 0)
+
 const send = (message) => process.stdout.write(`${JSON.stringify(message)}\n`)
 const die = (why) => {
-  process.stderr.write(`${why}\n`)
-  process.exit(1)
+  // Exit from the flush callback: `process.exit` does not wait for a pipe to
+  // drain, and the bridge's whole point here is reading these last words.
+  process.stderr.write(`${why}${'x'.repeat(PAD)}\n`, () => process.exit(1))
 }
 
 createInterface({ input: process.stdin }).on('line', (line) => {
@@ -34,7 +39,10 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     return
   }
   if (message.op !== 'scan') return
-  if (MODE === 'on-scan') die('crash-engine: refusing to scan')
+  if (MODE === 'on-scan') {
+    die('crash-engine: refusing to scan')
+    return // `die` exits from a flush callback, so the handler must stop here
+  }
 
   let name = 'unknown'
   try {

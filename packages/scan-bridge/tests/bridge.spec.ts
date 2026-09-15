@@ -94,6 +94,26 @@ describe('dsh-plugin-scan-bridge', () => {
     return { ctx, target }
   }
 
+  it('attaches the engine stderr to the failure it caused', async () => {
+    const report = await scanWith(
+      config({ args: [crashEngine, '--mode=on-scan'], engineName: 'crash-engine', timeoutMs: 3_000 }),
+      fixture('evil-js-config'),
+    )
+    const error = report.analyzersFailed.map((f) => f.error).join(' ')
+    expect(error).toMatch(/crash-engine: refusing to scan/)
+    expect(error).toMatch(/scan engine exited/)
+  })
+
+  it('bounds how much stderr a failure message carries', async () => {
+    const report = await scanWith(
+      config({ args: [crashEngine, '--mode=on-scan', '--pad=8192'], engineName: 'crash-engine', timeoutMs: 3_000 }),
+      fixture('evil-js-config'),
+    )
+    const error = report.analyzersFailed[0]?.error ?? ''
+    expect(error).toMatch(/refusing to scan/)
+    expect(error.length).toBeLessThan(2_000)
+  })
+
   it('withdraws the engine rules once the engine is gone', async () => {
     const { ctx } = await scanWithCrashEngine()
     // Rules declared by a dead engine are no longer backed by anything.

@@ -55,6 +55,17 @@ interface ErrorMsg { op: 'error'; id: number; error: string }
 
 const DEFAULT_TIMEOUT_MS = 5_000
 const DEFAULT_MAX_LINE_BYTES = 1024 * 1024
+/**
+ * How much of the engine's stderr to keep for a failure message. The head, not
+ * the tail: a crash states its reason first and spends the rest on a trace.
+ */
+const MAX_STDERR_CHARS = 1024
+
+/** Attach the engine's last words to a failure reason, if it left any. */
+function withStderr(reason: string, stderr: string): string {
+  const tail = stderr.trim().replace(/\s+/gu, ' ')
+  return tail.length === 0 ? reason : `${reason}: ${tail}`
+}
 
 interface Pending {
   resolve: (findings: Finding[]) => void
@@ -100,6 +111,8 @@ export class EngineBridge {
   private proc: ChildProcessWithoutNullStreams | null = null
   private lines: Interface | null = null
   private readonly pending = new Map<number, Pending>()
+  /** The current engine's stderr, bounded, for failure messages. */
+  private stderr = ''
   private seq = 0
   private ready = false
   private handshake: Handshake | null = null
@@ -134,7 +147,10 @@ export class EngineBridge {
     // Same for a write to a process that already died: EPIPE would otherwise
     // surface as an uncaught exception instead of a failed request.
     proc.stdin.on('error', (error: Error) => this.fail(new Error(`scan engine stdin failed: ${error.message}`)))
-    proc.stderr.on('data', () => {})
+    proc.stderr.on('data', (chunk: Buffer) => {
+      if (this.stderr.length >= MAX_STDERR_CHARS) return
+      this.stderr = (this.stderr + chunk.toString('utf8')).slice(0, MAX_STDERR_CHARS)
+    })
   }
 
   /**
@@ -148,7 +164,9 @@ export class EngineBridge {
     this.lines = null
     this.proc = null
     this.setRules({})
-    this.fail(new Error(reason))
+    const stderr = this.stderr
+    this.stderr = ''
+    this.fail(new Error(withStderr(reason, stderr)))
   }
 
   /** Replace the declared rule set, keeping the published object identity. */
