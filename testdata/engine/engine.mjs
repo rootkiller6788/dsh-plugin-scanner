@@ -7,6 +7,11 @@ import { join } from 'node:path'
 
 const ENGINE_VERSION = '1.0.0'
 
+/** `--pad=N --pad-char=C` pads every finding description, to test the line cap. */
+const flag = (name) => process.argv.find((arg) => arg.startsWith(`--${name}=`))?.slice(name.length + 3) ?? ''
+const PAD = Number(flag('pad') || 0)
+const PAD_CHAR = flag('pad-char') || 'x'
+
 const send = (message) => {
   process.stdout.write(JSON.stringify(message) + '\n')
 }
@@ -43,7 +48,7 @@ rl.on('line', (line) => {
         findings: [{
           ruleId: 'ENGINE_EVIL',
           title: 'Engine-detected evil package',
-          description: `package name "${name}" contains "evil"`,
+          description: `package name "${name}" contains "evil"${PAD_CHAR.repeat(PAD)}`,
           filePath: 'package.json',
         }],
       })

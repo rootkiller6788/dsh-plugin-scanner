@@ -55,6 +55,16 @@ describe('dsh-plugin-scan-bridge', () => {
     }
   })
 
+  it('fails a request whose reply passes the line cap, rather than hanging', async () => {
+    // 600 three-byte characters: under the cap when measured as UTF-16 units,
+    // well over it when measured as bytes.
+    const report = await scanWith(
+      config({ args: [engine, '--pad=600', '--pad-char=多'], maxLineBytes: 1024, timeoutMs: 2_000 }),
+      fixture('evil-js-config'),
+    )
+    expect(report.analyzersFailed.map((f) => f.error).join(' ')).toMatch(/1024-byte cap/)
+  })
+
   it('registers the engine rule pack for transparency', async () => {
     const ctx = new Context()
     await ctx.plugin(PluginScanService)

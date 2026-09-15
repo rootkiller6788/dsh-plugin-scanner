@@ -200,7 +200,16 @@ export class EngineBridge {
   }
 
   private onLine(line: string): void {
-    if (line.length > (this.config.maxLineBytes ?? DEFAULT_MAX_LINE_BYTES)) return
+    // `maxLineBytes` is bytes: measuring `line.length` counts UTF-16 units, so a
+    // line of multi-byte text would slip through at up to 4x the stated cap.
+    const maxLineBytes = this.config.maxLineBytes ?? DEFAULT_MAX_LINE_BYTES
+    if (Buffer.byteLength(line, 'utf8') > maxLineBytes) {
+      // Dropping the line silently leaves its request waiting out the full
+      // timeout and reports "request N timed out"; once a line is dropped the
+      // framing cannot be trusted either, so fail the in-flight requests.
+      this.fail(new Error(`scan engine line exceeds the ${maxLineBytes}-byte cap`))
+      return
+    }
     let message: ReadyMsg | FindingsMsg | ErrorMsg
     try {
       message = JSON.parse(line) as ReadyMsg | FindingsMsg | ErrorMsg
