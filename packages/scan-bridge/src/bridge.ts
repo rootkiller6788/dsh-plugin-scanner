@@ -103,7 +103,12 @@ export class EngineBridge {
   private seq = 0
   private ready = false
   private handshake: Handshake | null = null
-  private rules: Record<string, EngineRule> = {}
+  /**
+   * The engine's declared rules, mutated in place on every handshake so the
+   * {@link rulePack} object a consumer already registered stays live across an
+   * engine restart instead of freezing the first handshake's snapshot.
+   */
+  private readonly rules: Record<string, EngineRule> = {}
 
   constructor(private readonly config: BridgeConfig) {}
 
@@ -113,18 +118,43 @@ export class EngineBridge {
   }
 
   private ensureStarted(): void {
-    if (this.proc !== null && !this.proc.killed) return
+    if (this.proc !== null) return
     const proc = spawn(this.config.command, this.config.args ?? [], {
       stdio: ['pipe', 'pipe', 'pipe'],
     })
     this.proc = proc
     this.lines = createInterface({ input: proc.stdout })
     this.lines.on('line', (line) => this.onLine(line))
-    proc.on('exit', () => this.fail(new Error('scan engine exited')))
+    // 'close' rather than 'exit': it fires once stdio is drained, so anything
+    // the engine wrote to stderr is available when the failure is reported.
+    proc.on('close', () => this.onEngineGone('scan engine exited'))
     // Without a listener a spawn failure is an uncaught 'error' event that takes
     // the host process down; it belongs on the handshake, not on the stack.
     proc.on('error', (error: Error) => this.fail(new Error(`scan engine failed to start: ${error.message}`)))
+    // Same for a write to a process that already died: EPIPE would otherwise
+    // surface as an uncaught exception instead of a failed request.
+    proc.stdin.on('error', (error: Error) => this.fail(new Error(`scan engine stdin failed: ${error.message}`)))
     proc.stderr.on('data', () => {})
+  }
+
+  /**
+   * Drop the dead engine's process state. Clearing `proc` is what lets
+   * {@link ensureStarted} spawn a replacement: a child that exits on its own
+   * never sets `killed`, so keying the "already started" check on `killed`
+   * left every later request writing into a dead process and timing out.
+   */
+  private onEngineGone(reason: string): void {
+    this.lines?.close()
+    this.lines = null
+    this.proc = null
+    this.setRules({})
+    this.fail(new Error(reason))
+  }
+
+  /** Replace the declared rule set, keeping the published object identity. */
+  private setRules(rules: Record<string, EngineRule>): void {
+    for (const ruleId of Object.keys(this.rules)) delete this.rules[ruleId]
+    Object.assign(this.rules, rules)
   }
 
   /**
@@ -183,7 +213,7 @@ export class EngineBridge {
         return
       }
       this.ready = true
-      this.rules = message.rules ?? {}
+      this.setRules(message.rules ?? {})
       this.finishHandshake({ pack: this.rulePack })
       return
     }
@@ -219,7 +249,9 @@ export class EngineBridge {
   /** Scan one package root, returning the engine's findings. */
   async scan(root: string): Promise<Finding[]> {
     await this.init()
-    const proc = this.proc!
+    // The engine can die between a successful handshake and this line.
+    const proc = this.proc
+    if (proc === null) throw new Error('scan engine is not running')
     const id = ++this.seq
     const timeoutMs = this.config.timeoutMs ?? DEFAULT_TIMEOUT_MS
     return new Promise<Finding[]>((resolve, reject) => {
@@ -234,11 +266,14 @@ export class EngineBridge {
 
   /** Kill the engine process. */
   close(): void {
+    const proc = this.proc
     this.lines?.close()
-    this.proc?.kill()
+    this.lines = null
     this.proc = null
     this.ready = false
+    this.setRules({})
     this.fail(new Error('scan engine closed'))
+    proc?.kill()
   }
 }
 

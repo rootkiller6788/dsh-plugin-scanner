@@ -7,6 +7,9 @@ import { EngineBridge } from '../src/bridge.ts'
 
 const fixture = (name: string) => fileURLToPath(new URL(`../../../testdata/${name}`, import.meta.url))
 const engine = fileURLToPath(new URL('../../../testdata/engine/engine.mjs', import.meta.url))
+const crashEngine = fileURLToPath(new URL('../../../testdata/engine/crash-engine.mjs', import.meta.url))
+
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 function config(overrides: Partial<ScanBridge.Config> = {}): ScanBridge.Config {
   return {
@@ -63,6 +66,37 @@ describe('dsh-plugin-scan-bridge', () => {
     const ctx = new Context()
     await ctx.plugin(PluginScanService)
     await expect(ctx.plugin(ScanBridge, config({ engineVersion: '9.9.9' }))).rejects.toThrow(/version/)
+  })
+
+  /** Load the crashing engine (`--mode=after-scan`) and scan one evil fixture. */
+  async function scanWithCrashEngine() {
+    const ctx = new Context()
+    await ctx.plugin(PluginScanService)
+    await ctx.plugin(ScanBridge, config({
+      args: [crashEngine, '--mode=after-scan'],
+      engineName: 'crash-engine',
+      timeoutMs: 3_000,
+    }))
+    const target = { kind: 'directory', path: fixture('evil-js-config') } as const
+    const first = await ctx.pluginScan.scan(target)
+    expect(first.findings.map((f) => f.ruleId)).toContain('CRASH_ENGINE')
+    await delay(300) // let the engine's exit be observed
+    return { ctx, target }
+  }
+
+  it('withdraws the engine rules once the engine is gone', async () => {
+    const { ctx } = await scanWithCrashEngine()
+    // Rules declared by a dead engine are no longer backed by anything.
+    expect(ctx.pluginScan.ruleRegistry.CRASH_ENGINE).toBeUndefined()
+  })
+
+  it('respawns an engine that exited instead of writing into the corpse', async () => {
+    const { ctx, target } = await scanWithCrashEngine()
+
+    const second = await ctx.pluginScan.scan(target)
+    expect(second.analyzersFailed).toEqual([])
+    expect(second.findings.map((f) => f.ruleId)).toContain('CRASH_ENGINE')
+    expect(ctx.pluginScan.ruleRegistry.CRASH_ENGINE).toBeDefined()
   })
 
   it('closes the engine and withdraws the analyzer on dispose', async () => {
