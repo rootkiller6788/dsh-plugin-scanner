@@ -62,6 +62,14 @@ interface Pending {
   timer: NodeJS.Timeout
 }
 
+/** The single in-flight (or completed) handshake, shared by every caller. */
+interface Handshake {
+  promise: Promise<RulePack>
+  resolve: (pack: RulePack) => void
+  reject: (error: Error) => void
+  timer: NodeJS.Timeout
+}
+
 /** Coerce an engine severity into the closed set, defaulting to MEDIUM. */
 function coerceSeverity(value: string | undefined): Severity {
   return (SEVERITIES as readonly string[]).includes(value ?? '') ? (value as Severity) : 'MEDIUM'
@@ -94,7 +102,7 @@ export class EngineBridge {
   private readonly pending = new Map<number, Pending>()
   private seq = 0
   private ready = false
-  private handshake: { resolve: () => void; reject: (error: Error) => void } | null = null
+  private handshake: Handshake | null = null
   private rules: Record<string, EngineRule> = {}
 
   constructor(private readonly config: BridgeConfig) {}
@@ -113,7 +121,52 @@ export class EngineBridge {
     this.lines = createInterface({ input: proc.stdout })
     this.lines.on('line', (line) => this.onLine(line))
     proc.on('exit', () => this.fail(new Error('scan engine exited')))
+    // Without a listener a spawn failure is an uncaught 'error' event that takes
+    // the host process down; it belongs on the handshake, not on the stack.
+    proc.on('error', (error: Error) => this.fail(new Error(`scan engine failed to start: ${error.message}`)))
     proc.stderr.on('data', () => {})
+  }
+
+  /**
+   * Settle the in-flight handshake, if any. Every path that can end a
+   * handshake (a `ready` line, the timeout, or a failure) goes through here,
+   * so the field is cleared exactly once and the timer never outlives it.
+   */
+  private finishHandshake(outcome: { pack: RulePack } | { error: Error }): void {
+    const handshake = this.handshake
+    if (handshake === null) return
+    this.handshake = null
+    clearTimeout(handshake.timer)
+    if ('pack' in outcome) handshake.resolve(outcome.pack)
+    else handshake.reject(outcome.error)
+  }
+
+  /** Spawn the engine if needed and send `init`, registering the one handshake. */
+  private startHandshake(): Handshake {
+    this.ensureStarted()
+    const proc = this.proc
+    if (proc === null) throw new Error('scan engine failed to start')
+    const timeoutMs = this.config.timeoutMs ?? DEFAULT_TIMEOUT_MS
+    let resolve!: (pack: RulePack) => void
+    let reject!: (error: Error) => void
+    const promise = new Promise<RulePack>((res, rej) => {
+      resolve = res
+      reject = rej
+    })
+    const handshake: Handshake = {
+      promise,
+      resolve,
+      reject,
+      timer: setTimeout(() => {
+        this.finishHandshake({ error: new Error(`engine handshake timed out after ${timeoutMs}ms`) })
+      }, timeoutMs),
+    }
+    handshake.timer.unref()
+    // Registered before the write: a `ready` arriving early must find something
+    // to settle.
+    this.handshake = handshake
+    proc.stdin.write(`${JSON.stringify({ op: 'init', version: this.config.engineVersion } satisfies InitMsg)}\n`)
+    return handshake
   }
 
   private onLine(line: string): void {
@@ -131,8 +184,7 @@ export class EngineBridge {
       }
       this.ready = true
       this.rules = message.rules ?? {}
-      this.handshake?.resolve()
-      this.handshake = null
+      this.finishHandshake({ pack: this.rulePack })
       return
     }
     const entry = this.pending.get(message.id)
@@ -150,21 +202,18 @@ export class EngineBridge {
     }
     this.pending.clear()
     this.ready = false
-    this.handshake?.reject(error)
-    this.handshake = null
+    this.finishHandshake({ error })
   }
 
-  /** Perform the versioned handshake, once. @returns the engine's populated rule pack. */
+  /**
+   * Perform the versioned handshake, once. Concurrent callers share the one
+   * in-flight handshake — a second `init` must not overwrite the promise the
+   * first caller is awaiting.
+   * @returns the engine's populated rule pack.
+   */
   async init(): Promise<RulePack> {
     if (this.ready) return this.rulePack
-    this.ensureStarted()
-    const proc = this.proc!
-    await new Promise<void>((resolve, reject) => {
-      this.handshake = { resolve, reject }
-      proc.stdin.write(`${JSON.stringify({ op: 'init', version: this.config.engineVersion } satisfies InitMsg)}\n`)
-      setTimeout(() => reject(new Error('engine handshake timed out')), this.config.timeoutMs ?? DEFAULT_TIMEOUT_MS).unref()
-    })
-    return this.rulePack
+    return (this.handshake ?? this.startHandshake()).promise
   }
 
   /** Scan one package root, returning the engine's findings. */

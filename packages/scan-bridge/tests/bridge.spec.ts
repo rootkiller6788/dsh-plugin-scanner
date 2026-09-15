@@ -3,6 +3,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { describe, expect, it } from 'vitest'
 import PluginScanService from 'dsh-plugin-scan'
 import * as ScanBridge from 'dsh-plugin-scan-bridge'
+import { EngineBridge } from '../src/bridge.ts'
 
 const fixture = (name: string) => fileURLToPath(new URL(`../../../testdata/${name}`, import.meta.url))
 const engine = fileURLToPath(new URL('../../../testdata/engine/engine.mjs', import.meta.url))
@@ -34,6 +35,21 @@ describe('dsh-plugin-scan-bridge', () => {
   it('returns no findings for a clean package', async () => {
     const report = await scanWith(config(), fixture('clean-plugin'))
     expect(report.findings.map((f) => f.ruleId)).not.toContain('ENGINE_EVIL')
+  })
+
+  it('shares one handshake between scans that start together', async () => {
+    // Both scans reach init() before the engine is ready. A second handshake
+    // must not replace the promise the first caller is awaiting, or that caller
+    // waits on a promise nothing will ever settle.
+    const bridge = new EngineBridge(config())
+    try {
+      const root = fixture('evil-js-config')
+      const [a, b] = await Promise.all([bridge.scan(root), bridge.scan(root)])
+      expect(a.map((f) => f.ruleId)).toContain('ENGINE_EVIL')
+      expect(b.map((f) => f.ruleId)).toContain('ENGINE_EVIL')
+    } finally {
+      bridge.close()
+    }
   })
 
   it('registers the engine rule pack for transparency', async () => {
