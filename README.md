@@ -78,6 +78,7 @@ Each entry carries either a `path` (local directory) or a `repo` (github shortha
 - `ctx.pluginScan` config: `disabledRules` (drop rule ids) and `severityOverrides` (per-rule severity).
 - `scan-rules` config: `trustedRowIds`, `builtinToolNames`.
 - `tool-scan` config: `failOn` — a severity threshold; the `scan_plugin` result carries `failed: true` when `maxSeverity` reaches it (empty disables).
+- `tool-scan` renders at most 25 findings, and at most 25 flagged packages per batch; the rest are summarized by count. The rendered blocks are the model-facing tool content, so this caps what a package shipping hundreds of findings can push into the context.
 
 ## Scope and limitations
 

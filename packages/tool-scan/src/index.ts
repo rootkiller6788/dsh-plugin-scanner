@@ -35,22 +35,42 @@ function parseFailOn(value: string): Severity | undefined {
   return value as Severity
 }
 
-/** Render a batch report as one human-readable text block. */
-function renderBatchText(batch: ScanBatchReport): string {
+/**
+ * How many findings / packages a rendered report spells out before it
+ * summarizes. `output.render` returns the model-facing content blocks
+ * (`ToolResult.content`), so this text is what a hostile package would be
+ * flooding if it could print one line per file it shipped.
+ */
+const MAX_RENDERED_FINDINGS = 25
+const MAX_RENDERED_PACKAGES = 25
+
+/**
+ * Render a batch report as one text block. Only the packages with findings are
+ * listed — in a registry of a thousand entries the clean ones are the noise.
+ */
+export function renderBatchText(batch: ScanBatchReport): string {
+  const flagged = batch.results.filter((result) => result.findingsCount > 0)
   const lines = [`Scanned ${batch.results.length} plugin(s): ${batch.findingsCount} finding(s), max ${batch.maxSeverity}.`]
-  for (const result of batch.results) {
+  for (const result of flagged.slice(0, MAX_RENDERED_PACKAGES)) {
     lines.push(`- ${result.package.name}: ${result.findingsCount} finding(s), max ${result.maxSeverity}`)
   }
+  const hidden = flagged.length - MAX_RENDERED_PACKAGES
+  if (hidden > 0) lines.push(`- ...and ${hidden} more package(s) with findings`)
+  lines.push(`- ${batch.results.length - flagged.length} package(s) with no findings`)
   return lines.join('\n')
 }
 
-/** Render a report as one human-readable text block. */
-function renderScanText(report: ScanReport & { failed?: boolean }): string {
+/** Render a report as one text block, bounded so findings cannot flood the context. */
+export function renderScanText(report: ScanReport & { failed?: boolean }): string {
   const lines: string[] = []
   lines.push(`Scanned ${report.package.name}: ${report.findingsCount} finding(s), max ${report.maxSeverity}.`)
-  for (const finding of report.findings) {
+  for (const finding of report.findings.slice(0, MAX_RENDERED_FINDINGS)) {
     const where = finding.filePath !== undefined ? ` @ ${finding.filePath}` : ''
     lines.push(`- [${finding.severity}] ${finding.title} (${finding.ruleId})${where}`)
+  }
+  const hidden = report.findings.length - MAX_RENDERED_FINDINGS
+  if (hidden > 0) {
+    lines.push(`- ...and ${hidden} more finding(s); the report object carries every one.`)
   }
   for (const failure of report.analyzersFailed) {
     lines.push(`- analyzer ${failure.analyzer} failed: ${failure.error}`)
