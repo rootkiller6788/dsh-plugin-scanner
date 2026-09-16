@@ -13,6 +13,7 @@ import {
   SEVERITIES,
   THREAT_CATEGORIES,
   type Finding,
+  type JsonValue,
   type RuleMeta,
   type RulePack,
   type Severity,
@@ -159,6 +160,7 @@ export function finding(opts: {
   line?: number
   snippet?: string
   remediation?: string
+  metadata?: Readonly<Record<string, JsonValue>>
 }): Finding {
   const meta = rule(opts.ruleId)
   return {
@@ -173,5 +175,6 @@ export function finding(opts: {
     snippet: opts.snippet,
     remediation: opts.remediation,
     analyzer: opts.analyzer,
+    metadata: opts.metadata,
   }
 }

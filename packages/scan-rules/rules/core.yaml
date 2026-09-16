@@ -118,3 +118,13 @@ rules:
     severity: MEDIUM
     category: self_modification
     description: Source writes to cordis.yml / profile / harness-home state, a self-modification shape.
+
+  SCAN_FILE_SKIPPED:
+    severity: LOW
+    category: scan_coverage
+    description: The loader left files unscanned (oversized, unreadable, or over the scan byte budget); no detector saw their content.
+
+  SCAN_TRUNCATED:
+    severity: MEDIUM
+    category: scan_coverage
+    description: The walk hit the loader's file cap, so the detectors saw only part of the package.

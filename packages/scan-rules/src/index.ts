@@ -1,7 +1,7 @@
 /**
- * Built-in analyzer provider: registers the four core detectors and the core
- * rule pack on `ctx.pluginScan`. Each registration is an effect; disposing this
- * plugin withdraws all four analyzers. A third-party detector registers through
+ * Built-in analyzer provider: registers the core detectors and the core rule
+ * pack on `ctx.pluginScan`. Each registration is an effect; disposing this
+ * plugin withdraws every analyzer. A third-party detector registers through
  * the exact same `registerAnalyzer` method — there is no privileged factory.
  * @module dsh-plugin-scan-rules
  */
@@ -10,6 +10,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { makeCapabilityAnalyzer } from './analyzers/capability-analyzer.ts'
 import { makeConfigAnalyzer } from './analyzers/config-analyzer.ts'
+import { makeCoverageAnalyzer } from './analyzers/coverage-analyzer.ts'
 import { makeModelAnalyzer } from './analyzers/model-analyzer.ts'
 import { makeRuntimeAnalyzer } from './analyzers/runtime-analyzer.ts'
 import { CORE_PACK, DEFAULT_BUILTIN_TOOLS, DEFAULT_TRUSTED_ROWS } from './rules.ts'
@@ -32,14 +33,15 @@ export const Config: z<Config> = z.object({
   builtinToolNames: z.array(z.string()).default([...DEFAULT_BUILTIN_TOOLS]),
 })
 
-/** Register the core rule pack and the four built-in analyzers. */
+/** Register the core rule pack and the built-in analyzers. */
 export function apply(ctx: Context, config: Config = {}): void {
-  // Each registration is an effect: disposing this plugin withdraws all four
-  // analyzers and the pack. A third-party detector registers through the same
+  // Each registration is an effect: disposing this plugin withdraws every
+  // analyzer and the pack. A third-party detector registers through the same
   // `registerAnalyzer` + `ctx.effect` pair.
   ctx.effect(() => ctx.pluginScan.registerRulePack(CORE_PACK))
   ctx.effect(() => ctx.pluginScan.registerAnalyzer(makeConfigAnalyzer(config)))
   ctx.effect(() => ctx.pluginScan.registerAnalyzer(makeCapabilityAnalyzer(config)))
   ctx.effect(() => ctx.pluginScan.registerAnalyzer(makeModelAnalyzer()))
   ctx.effect(() => ctx.pluginScan.registerAnalyzer(makeRuntimeAnalyzer()))
+  ctx.effect(() => ctx.pluginScan.registerAnalyzer(makeCoverageAnalyzer()))
 }

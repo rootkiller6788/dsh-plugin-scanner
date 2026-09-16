@@ -1,24 +1,31 @@
 /**
  * Directory loader: turn a `ScanTarget` into a bounded {@link PluginPackage}.
  *
- * Mirrors the bounded-scan posture of skill-scanner: a hard cap on visited
- * directories and per-file bytes so a hostile tree (symlink fan-out, huge file)
- * cannot turn a scan into a full-filesystem crawl. The v1 loader is synchronous
- * and small; loading is a bounded, fast step before the async analyzer pass.
+ * Mirrors the bounded-scan posture of skill-scanner: hard caps on visited
+ * directories, collected files, per-file bytes, and total bytes, so a hostile
+ * tree (symlink fan-out, huge file) cannot turn a scan into a full-filesystem
+ * crawl. The walk honours the caller's abort signal, and anything it refuses to
+ * read is reported in `PluginPackage.skipped` rather than silently becoming
+ * empty content. Loading stays a synchronous, bounded step before the async
+ * analyzer pass.
  * @module dsh-plugin-scan/load
  */
 
-import { readdirSync, readFileSync, rmSync, mkdtempSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { homedir, tmpdir } from 'node:os'
 import { join, relative, resolve } from 'node:path'
 import yaml, { Type } from 'js-yaml'
-import type { CordisRow, PluginFile, PluginFileKind, PluginPackage, ScanTarget } from './index.ts'
+import type { CordisRow, PluginFile, PluginFileKind, PluginPackage, ScanTarget, SkipReason, SkippedFile } from './index.ts'
 
 /** Upper bound on directories visited during a recursive walk. */
 const MAX_WALK_DIRS = 10_000
+/** Upper bound on files collected in one walk; beyond it the package is partial. */
+const MAX_FILES = 20_000
 /** Per-file read cap; larger files are skipped rather than slurped. */
 const MAX_FILE_BYTES = 256 * 1024
+/** Total bytes one scan will read; a hostile tree cannot make the scan unbounded. */
+const MAX_TOTAL_BYTES = 32 * 1024 * 1024
 /** Directory names never descended into: deps, VCS, build output, and tests. */
 const SKIP_DIRS = new Set(['node_modules', '.git', '.dsh', '.pnpm', 'lib', 'dist', 'tests'])
 
@@ -40,14 +47,45 @@ function fileKind(path: string): PluginFileKind {
   return 'other'
 }
 
-/** Read a file bounded by {@link MAX_FILE_BYTES}; oversized or unreadable files become empty. */
-function readText(path: string): string {
+/** What the loader has spent, and what it had to leave behind. */
+interface LoadState {
+  bytesRead: number
+  readonly skipped: SkippedFile[]
+  truncated: boolean
+  readonly signal?: AbortSignal
+}
+
+/** Thrown when the caller's signal aborted the scan mid-load. */
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted === true) throw new Error('scan aborted')
+}
+
+type ReadResult = { readonly ok: true; readonly text: string } | { readonly ok: false; readonly reason: SkipReason }
+
+/**
+ * Read a file under the scan's three bounds: the abort signal, the per-file cap
+ * (`stat` first, so an oversized file is never slurped to find out), and the
+ * total-bytes budget. Every refusal is reported, not turned into empty content.
+ */
+function readText(path: string, state: LoadState): ReadResult {
+  throwIfAborted(state.signal)
+  let size: number
   try {
-    const content = readFileSync(path)
-    if (content.byteLength > MAX_FILE_BYTES) return ''
-    return content.toString('utf8')
+    size = statSync(path).size
   } catch {
-    return ''
+    return { ok: false, reason: 'unreadable' }
+  }
+  if (size > MAX_FILE_BYTES) return { ok: false, reason: 'oversized' }
+  if (state.bytesRead + size > MAX_TOTAL_BYTES) {
+    state.truncated = true
+    return { ok: false, reason: 'budget' }
+  }
+  try {
+    const text = readFileSync(path, 'utf8')
+    state.bytesRead += size
+    return { ok: true, text }
+  } catch {
+    return { ok: false, reason: 'unreadable' }
   }
 }
 
@@ -60,27 +98,49 @@ function readText(path: string): string {
  * Reading on demand keeps those bytes off the scan's critical path and out of
  * the retained package model.
  */
-function lazyFile(root: string, rel: string, kind: PluginFileKind): PluginFile {
+function lazyFile(root: string, rel: string, kind: PluginFileKind, state: LoadState): PluginFile {
   let content: string | undefined
+  let recorded = false
   return {
     path: rel,
     kind,
     get content(): string {
-      content ??= readText(join(root, rel))
+      if (content === undefined) {
+        const result = readText(join(root, rel), state)
+        if (result.ok) {
+          content = result.text
+        } else {
+          // Empty content is indistinguishable from an empty file, so the gap
+          // is recorded where the caller can report it.
+          content = ''
+          if (!recorded) {
+            recorded = true
+            state.skipped.push({ path: rel, reason: result.reason })
+          }
+        }
+      }
       return content
     },
   }
 }
 
 /** Walk a package directory collecting file entries with lazy content. */
-function walkFiles(root: string): PluginFile[] {
+function walkFiles(root: string, state: LoadState): PluginFile[] {
   const files: PluginFile[] = []
   let dirs = 0
   const stack: string[] = [root]
   while (stack.length > 0) {
+    throwIfAborted(state.signal)
+    if (files.length >= MAX_FILES) {
+      state.truncated = true
+      break
+    }
     const dir = stack.pop()
     if (dir === undefined) break
-    if (++dirs > MAX_WALK_DIRS) break
+    if (++dirs > MAX_WALK_DIRS) {
+      state.truncated = true
+      break
+    }
     let entries
     try {
       entries = readdirSync(dir, { withFileTypes: true })
@@ -94,7 +154,12 @@ function walkFiles(root: string): PluginFile[] {
         if (!SKIP_DIRS.has(entry.name)) stack.push(abs)
       } else if (entry.isFile()) {
         if (entry.name === 'package.json' || entry.name === 'cordis.patch.yml') continue
-        files.push(lazyFile(root, rel, fileKind(rel)))
+        // A single directory can hold more than the cap by itself.
+        if (files.length >= MAX_FILES) {
+          state.truncated = true
+          break
+        }
+        files.push(lazyFile(root, rel, fileKind(rel), state))
       }
     }
   }
@@ -179,47 +244,81 @@ function resolveScanRoot(target: ScanTarget): { root: string; tempRoot?: string 
   }
 }
 
+/** Read one of the two files the model carries directly (manifest, patch). */
+function readSpecial(root: string, rel: string, state: LoadState): string | undefined {
+  const result = readText(join(root, rel), state)
+  if (result.ok) return result.text
+  // A manifest that exists but could not be read is a coverage gap too; a
+  // missing one is not, so only a refusal that is not ENOENT is recorded.
+  if (result.reason !== 'unreadable' || existsSync(join(root, rel))) {
+    state.skipped.push({ path: rel, reason: result.reason })
+  }
+  return undefined
+}
+
 /**
  * Load a plugin package from a target.
  * @param target - a directory, profile, or github repo; `registry` is not implemented in v1.
+ * @param options - optional cancellation signal, honoured throughout the walk.
  * @returns the bounded package model.
  */
-export function loadPluginPackage(target: ScanTarget): PluginPackage {
+export function loadPluginPackage(target: ScanTarget, options?: { signal?: AbortSignal }): PluginPackage {
   const { root, tempRoot } = resolveScanRoot(target)
-
-  let name = 'unknown'
-  let version: string | undefined
-  let manifest: string | undefined
-  let scripts: Record<string, string> | undefined
-  let dependencies: Record<string, string> | undefined
   try {
-    manifest = readText(join(root, 'package.json'))
-    const parsed = JSON.parse(manifest) as Record<string, unknown>
-    name = typeof parsed.name === 'string' ? parsed.name : name
-    version = typeof parsed.version === 'string' ? parsed.version : undefined
-    if (parsed.scripts !== null && typeof parsed.scripts === 'object') {
-      scripts = parsed.scripts as Record<string, string>
-    }
-    if (parsed.dependencies !== null && typeof parsed.dependencies === 'object') {
-      dependencies = parsed.dependencies as Record<string, string>
-    }
-  } catch {
-    manifest = undefined
-  }
+    const state: LoadState = { bytesRead: 0, skipped: [], truncated: false, signal: options?.signal }
 
-  let patchRaw: string | undefined
-  let patchRows: CordisRow[] = []
-  try {
-    const patchText = readText(join(root, 'cordis.patch.yml'))
-    const parsed = parsePatchRows(patchText)
-    patchRaw = parsed.raw
-    patchRows = parsed.rows
-  } catch {
-    patchRaw = undefined
-    patchRows = []
-  }
+    let name = 'unknown'
+    let version: string | undefined
+    let scripts: Record<string, string> | undefined
+    let dependencies: Record<string, string> | undefined
+    const manifest = readSpecial(root, 'package.json', state)
+    try {
+      const parsed = JSON.parse(manifest ?? '') as Record<string, unknown>
+      name = typeof parsed.name === 'string' ? parsed.name : name
+      version = typeof parsed.version === 'string' ? parsed.version : undefined
+      if (parsed.scripts !== null && typeof parsed.scripts === 'object') {
+        scripts = parsed.scripts as Record<string, string>
+      }
+      if (parsed.dependencies !== null && typeof parsed.dependencies === 'object') {
+        dependencies = parsed.dependencies as Record<string, string>
+      }
+    } catch {
+      // An absent or unparsable manifest leaves the defaults in place.
+    }
 
-  return { root, name, version, manifest, scripts, dependencies, patchRows, patchRaw, files: walkFiles(root), tempRoot }
+    let patchRaw: string | undefined
+    let patchRows: CordisRow[] = []
+    const patchText = readSpecial(root, 'cordis.patch.yml', state)
+    if (patchText !== undefined) {
+      const parsed = parsePatchRows(patchText)
+      patchRaw = parsed.raw
+      patchRows = parsed.rows
+    }
+
+    const files = walkFiles(root, state)
+    return {
+      root,
+      name,
+      version,
+      manifest,
+      scripts,
+      dependencies,
+      patchRows,
+      patchRaw,
+      files,
+      skipped: state.skipped,
+      // Live, not a snapshot: the byte budget is only discovered as detectors
+      // read, which is after this object is built.
+      get truncated(): boolean {
+        return state.truncated
+      },
+      tempRoot,
+    }
+  } catch (error) {
+    // The clone happens before the walk, so a failed load must not leak it.
+    if (tempRoot !== undefined) rmSync(tempRoot, { recursive: true, force: true })
+    throw error
+  }
 }
 
 /** Remove a package's ephemeral clone root, if any. */

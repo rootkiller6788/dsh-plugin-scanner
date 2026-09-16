@@ -27,6 +27,11 @@ There is no privileged core to patch. The seam is the standard dsh three-role sp
 | `capability-analyzer` | `eval`/`new Function`/`node:vm`; raw `node:fs`/`child_process`/`net` imports; `process.env` + network (credential exfiltration); shadowing a built-in tool name; `preinstall`/`postinstall`/`prepare` scripts |
 | `model-analyzer` | prompt-injection directives (ignore-override, jailbreak) in model-visible text |
 | `runtime-analyzer` | dynamic Cordis packages (`cordis_define`/`cordis_run`/`ctx.dynamic`); writing `cordis.yml`/profile state |
+| `coverage-analyzer` | the scan's own gaps: files the loader refused to read (oversized / unreadable / over the byte budget) and a walk that stopped at the file cap |
+
+The last one detects nothing about the package; it reports on the scan. A
+package whose payload sits in a file the loader never read looks exactly like a
+clean one, so "no findings" is only meaningful next to "everything was read".
 
 Rules live in [`packages/scan-rules/rules/core.yaml`](packages/scan-rules/rules/core.yaml): the manifest (severity / category / description) plus per-rule case-insensitive `matches` lists. Structural checks (row overrides, AND-combinations, lifecycle scripts) stay in the analyzer code. Every `ruleId` an analyzer emits must have a manifest entry — `finding()` fails loud on a missing one.
 
@@ -76,7 +81,7 @@ Each entry carries either a `path` (local directory) or a `repo` (github shortha
 
 ## Scope and limitations
 
-This is a **best-effort static scanner**, not a security guarantee. "No findings" means no known pattern matched — it does not certify that a plugin is safe. Rules are heuristics (substring + structure, not full AST/dataflow); a determined attacker evades signatures, and the scanner will match a literal token like `eval` even in a comment. Pair results with manual review before installing a plugin you do not trust.
+This is a **best-effort static scanner**, not a security guarantee. "No findings" means no known pattern matched — it does not certify that a plugin is safe. Every scan reports what it did not read (`SCAN_FILE_SKIPPED`) and whether the walk stopped at a cap (`SCAN_TRUNCATED`); when either is present, the "no known threat patterns detected" line is a partial answer. Rules are heuristics (substring + structure, not full AST/dataflow); a determined attacker evades signatures, and the scanner will match a literal token like `eval` even in a comment. Pair results with manual review before installing a plugin you do not trust.
 
 ## Repo layout
 

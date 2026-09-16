@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
@@ -84,6 +84,59 @@ describe('loadPluginPackage', () => {
     // ...and the read is memoized, so a second access does not re-read.
     writeFileSync(join(dir, 'a.ts'), 'const third = 3')
     expect(entry.content).toBe('const rewritten = 2')
+  })
+})
+
+describe('load bounds and cancellation', () => {
+  it('records an oversized file instead of handing detectors empty content', () => {
+    const dir = fixturePackage({
+      'package.json': JSON.stringify({ name: 'p' }),
+      'src/big.ts': `// ${'x'.repeat(300 * 1024)}`,
+    })
+    const pkg = loadPluginPackage({ kind: 'directory', path: dir })
+
+    // The entry still exists, but reading it is what records the gap.
+    expect(pkg.files.find((f) => f.path === 'src/big.ts')?.content).toBe('')
+    expect(pkg.skipped).toEqual([{ path: 'src/big.ts', reason: 'oversized' }])
+    expect(pkg.truncated).toBe(false)
+  })
+
+  it('does not read past the total byte budget, and says so', () => {
+    // 200 files of 256 KiB each is 50 MiB, over the scan's 32 MiB budget.
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-budget-'))
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'heavy' }))
+    for (let i = 0; i < 200; i++) writeFileSync(join(dir, `m${i}.ts`), 'y'.repeat(256 * 1024))
+
+    const pkg = loadPluginPackage({ kind: 'directory', path: dir })
+    for (const file of pkg.files) void file.content
+
+    expect(pkg.truncated).toBe(true)
+    expect(pkg.skipped.every((file) => file.reason === 'budget')).toBe(true)
+    expect(pkg.skipped.length).toBeGreaterThan(0)
+  })
+
+  it('aborts the walk when the caller’s signal is aborted', async () => {
+    const dir = fixturePackage({ 'package.json': JSON.stringify({ name: 'p' }), 'a.ts': 'let a = 1' })
+    const controller = new AbortController()
+    controller.abort()
+
+    expect(() => loadPluginPackage({ kind: 'directory', path: dir }, { signal: controller.signal }))
+      .toThrow(/aborted/)
+  })
+
+  it('does not leak a github clone when the load aborts', async () => {
+    const controller = new AbortController()
+    controller.abort()
+    const before = readdirSync(tmpdir()).filter((name) => name.startsWith('dsh-scan-repo-')).length
+
+    // The clone happens before the walk, so an abort must clean it up.
+    const repo = makeGitRepo({ 'package.json': JSON.stringify({ name: 'evil-repo' }) })
+    const ctx = new Context()
+    await ctx.plugin(PluginScanService)
+    await expect(ctx.pluginScan.scan({ kind: 'github', repo }, { signal: controller.signal })).rejects.toThrow(/aborted/)
+
+    const after = readdirSync(tmpdir()).filter((name) => name.startsWith('dsh-scan-repo-')).length
+    expect(after).toBe(before)
   })
 })
 

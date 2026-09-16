@@ -1,3 +1,6 @@
+import { mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Context } from '@deepseek-ai/cordis'
 import { describe, expect, it } from 'vitest'
@@ -61,13 +64,37 @@ describe('built-in analyzers', () => {
     expect(report.maxSeverity).toBe('SAFE')
   })
 
-  it('registers four analyzers and withdraws them on dispose', async () => {
+  it('reports the files the loader could not read', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-coverage-'))
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'p' }))
+    // Over the loader's per-file cap, so no detector ever sees its content.
+    writeFileSync(join(dir, 'payload.ts'), `// ${'x'.repeat(300 * 1024)}`)
+
+    const ctx = new Context()
+    await ctx.plugin(PluginScanService)
+    await ctx.plugin(ScanRules)
+    const report = await ctx.pluginScan.scan({ kind: 'directory', path: dir })
+
+    const skipped = report.findings.find((f) => f.ruleId === 'SCAN_FILE_SKIPPED')
+    expect(skipped?.severity).toBe('LOW')
+    expect(skipped?.metadata?.reason).toBe('oversized')
+    expect(skipped?.metadata?.paths).toEqual(['payload.ts'])
+    expect(skipped?.description).toMatch(/not read/)
+  })
+
+  it('registers every built-in analyzer and withdraws them on dispose', async () => {
     const ctx = new Context()
     await ctx.plugin(PluginScanService)
     const fiber = await ctx.plugin(ScanRules)
     expect(ctx.pluginScan.scan).toBeTypeOf('function')
     const names = await ctx.pluginScan.scan({ kind: 'directory', path: fixture('clean-plugin') }).then((r) => r.analyzers)
-    expect(names).toEqual(['config-analyzer', 'capability-analyzer', 'model-analyzer', 'runtime-analyzer'])
+    expect(names).toEqual([
+      'config-analyzer',
+      'capability-analyzer',
+      'model-analyzer',
+      'runtime-analyzer',
+      'coverage-analyzer',
+    ])
 
     await fiber.dispose()
     const after = await ctx.pluginScan.scan({ kind: 'directory', path: fixture('clean-plugin') })

@@ -50,7 +50,11 @@ export function atLeast(severity: Severity | 'SAFE', threshold: Severity): boole
 /** A JSON-safe value; used for finding metadata so reports are model- and wire-safe. */
 export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue }
 
-/** Threat categories specific to dsh plugins (not skill packages). */
+/**
+ * Threat categories specific to dsh plugins (not skill packages).
+ * `scan_coverage` is the odd one out: it reports on the scan itself, not on the
+ * package — an incomplete scan is a caveat a reader has to see.
+ */
 export const THREAT_CATEGORIES = [
   'config_row_override',
   'js_config_expression',
@@ -60,6 +64,7 @@ export const THREAT_CATEGORIES = [
   'tool_shadowing',
   'dynamic_package',
   'self_modification',
+  'scan_coverage',
 ] as const
 
 /** One threat category. */
@@ -94,6 +99,15 @@ export interface PluginFile {
   readonly kind: PluginFileKind
 }
 
+/** Why the loader left a file out of {@link PluginPackage.files}' content. */
+export type SkipReason = 'oversized' | 'unreadable' | 'budget'
+
+/** A file the scan could not read, recorded so the gap is not silent. */
+export interface SkippedFile {
+  readonly path: string
+  readonly reason: SkipReason
+}
+
 /** One resolvable row extracted from a `cordis.patch.yml`. */
 export interface CordisRow {
   readonly id: string
@@ -115,6 +129,10 @@ export interface PluginPackage {
   /** Raw `cordis.patch.yml` text, kept for `!!js` detection that YAML parsing would lose. */
   readonly patchRaw?: string
   readonly files: readonly PluginFile[]
+  /** Files the loader could not read; their content is empty, not absent. */
+  readonly skipped: readonly SkippedFile[]
+  /** The walk stopped at a cap, so `files` is not the whole package. */
+  readonly truncated: boolean
   /** Ephemeral clone root (github target); remove after the scan. */
   readonly tempRoot?: string
 }
@@ -281,7 +299,7 @@ export class PluginScanService extends Service {
   async scan(target: ScanTarget, options?: { signal?: AbortSignal }): Promise<ScanReport> {
     const start = Date.now()
     const { loadPluginPackage, cleanupPackage } = await import('./load.ts')
-    const pkg = loadPluginPackage(target)
+    const pkg = loadPluginPackage(target, options)
 
     try {
       // Detectors are independent passes over one already-loaded package, and
