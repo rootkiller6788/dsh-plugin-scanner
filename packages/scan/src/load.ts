@@ -256,6 +256,35 @@ function readSpecial(root: string, rel: string, state: LoadState): string | unde
   return undefined
 }
 
+/** How a target is named in an error, since `root` alone loses the intent. */
+function describeTarget(target: ScanTarget): string {
+  switch (target.kind) {
+    case 'directory':
+      return target.path
+    case 'profile':
+      return `profile "${target.name}"`
+    case 'github':
+      return `repo "${target.repo}"`
+    case 'registry':
+      return `registry "${target.path}"`
+  }
+}
+
+/**
+ * Reject a root that cannot be read, rather than walking it into an empty
+ * package. A scan of a mistyped path reports zero findings and `SAFE`, which is
+ * indistinguishable from a scan of a genuinely clean plugin.
+ */
+function assertReadableRoot(root: string, target: ScanTarget): void {
+  let isDirectory = false
+  try {
+    isDirectory = statSync(root).isDirectory()
+  } catch {
+    throw new Error(`scan root does not exist: ${describeTarget(target)} (${root})`)
+  }
+  if (!isDirectory) throw new Error(`scan root is not a directory: ${describeTarget(target)} (${root})`)
+}
+
 /**
  * Load a plugin package from a target.
  * @param target - a directory, profile, or github repo; `registry` is not implemented in v1.
@@ -265,6 +294,7 @@ function readSpecial(root: string, rel: string, state: LoadState): string | unde
 export function loadPluginPackage(target: ScanTarget, options?: { signal?: AbortSignal }): PluginPackage {
   const { root, tempRoot } = resolveScanRoot(target)
   try {
+    assertReadableRoot(root, target)
     const state: LoadState = { bytesRead: 0, skipped: [], truncated: false, signal: options?.signal }
 
     let name = 'unknown'

@@ -214,6 +214,38 @@ export interface Config {
   severityOverrides?: Record<string, Severity>
 }
 
+/** How many packages a batch scan keeps in flight when the caller does not say. */
+const DEFAULT_BATCH_CONCURRENCY = 4
+
+/**
+ * Run `work` over `items` with at most `limit` in flight, returning results in
+ * input order. A failure stops new work from being handed out but lets the
+ * in-flight scans finish before it is rethrown, so a batch does not leak
+ * half-started scans or unhandled rejections.
+ */
+async function mapBounded<T, R>(items: readonly T[], limit: number, work: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array<R>(items.length)
+  let next = 0
+  let failed = false
+  let failure: unknown
+  const worker = async (): Promise<void> => {
+    while (!failed && next < items.length) {
+      const index = next++
+      try {
+        results[index] = await work(items[index]!)
+      } catch (error) {
+        if (!failed) {
+          failed = true
+          failure = error
+        }
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(Math.max(limit, 1), items.length) }, worker))
+  if (failed) throw failure
+  return results
+}
+
 /** Render an unknown thrown value as a bounded message. */
 function renderThrown(value: unknown): string {
   if (value instanceof Error) return value.message
@@ -340,19 +372,27 @@ export class PluginScanService extends Service {
   /**
    * Scan every package listed in a registry file (a JSON array of
    * `{ name, path? }` or `{ name, repo? }` entries), aggregating the results.
+   * Each package is an independent scan (its own clone, its own analyzers), so
+   * they run a few at a time rather than strictly one after another — a
+   * registry of a thousand entries is the batch's whole point. Results keep
+   * registry order.
    * @param path - path to the registry JSON file.
-   * @param options - optional cancellation signal.
+   * @param options - optional cancellation signal and in-flight limit.
    * @returns the aggregate batch report.
    */
-  async scanRegistry(path: string, options?: { signal?: AbortSignal }): Promise<ScanBatchReport> {
+  async scanRegistry(
+    path: string,
+    options?: { signal?: AbortSignal; concurrency?: number },
+  ): Promise<ScanBatchReport> {
     const start = Date.now()
     const { readRegistryTargets } = await import('./load.ts')
     const targets = readRegistryTargets(path)
 
-    const results: ScanReport[] = []
-    for (const target of targets) {
-      results.push(await this.scan(target, options))
-    }
+    const results = await mapBounded(
+      targets,
+      options?.concurrency ?? DEFAULT_BATCH_CONCURRENCY,
+      (target) => this.scan(target, options),
+    )
 
     return {
       results,

@@ -312,6 +312,54 @@ describe('PluginScanService', () => {
     expect(batch.maxSeverity).toBe('HIGH')
   })
 
+  it('runs a batch with bounded concurrency, keeping registry order', async () => {
+    const ctx = new Context()
+    await ctx.plugin(PluginScanService)
+    let inFlight = 0
+    let peak = 0
+    const analyzer: Analyzer = {
+      name: 'gated',
+      analyze: async (input) => {
+        inFlight += 1
+        peak = Math.max(peak, inFlight)
+        await new Promise((resolve) => setTimeout(resolve, 20))
+        inFlight -= 1
+        return input.pkg.name.startsWith('evil') ? [fakeFinding('EVIL')] : []
+      },
+    }
+    ctx.pluginScan.registerAnalyzer(analyzer)
+
+    const names = ['evil-a', 'clean-a', 'evil-b', 'clean-b', 'evil-c', 'clean-c']
+    const registryPath = join(mkdtempSync(join(tmpdir(), 'dsh-reg-')), 'registry.json')
+    writeFileSync(registryPath, JSON.stringify(names.map((name) => ({
+      name,
+      path: fixturePackage({ 'package.json': JSON.stringify({ name }) }),
+    }))))
+
+    const batch = await ctx.pluginScan.scanRegistry(registryPath, { concurrency: 3 })
+    expect(peak).toBe(3)
+    expect(batch.results.map((result) => result.package.name)).toEqual(names)
+    expect(batch.findingsCount).toBe(3)
+  })
+
+  it('rejects a target whose root is missing instead of reporting it clean', async () => {
+    const ctx = new Context()
+    await ctx.plugin(PluginScanService)
+    const missing = join(mkdtempSync(join(tmpdir(), 'dsh-gone-')), 'not-here')
+
+    await expect(ctx.pluginScan.scan({ kind: 'directory', path: missing })).rejects.toThrow(/does not exist/)
+  })
+
+  it('rejects a batch whose entry cannot be scanned', async () => {
+    const ctx = new Context()
+    await ctx.plugin(PluginScanService)
+    const registryPath = join(mkdtempSync(join(tmpdir(), 'dsh-reg-')), 'registry.json')
+    writeFileSync(registryPath, JSON.stringify([{ name: 'a', path: join(tmpdir(), 'dsh-absent-entry') }]))
+
+    // A failed entry must surface, not be skipped into a falsely clean batch.
+    await expect(ctx.pluginScan.scanRegistry(registryPath)).rejects.toThrow(/does not exist/)
+  })
+
   it('aggregates the batch maximum from the per-result maxima', async () => {
     const ctx = new Context()
     await ctx.plugin(PluginScanService)
